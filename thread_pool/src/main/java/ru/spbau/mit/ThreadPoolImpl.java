@@ -10,7 +10,7 @@ public final class ThreadPoolImpl implements ThreadPool {
     private static final int TASK_COUNT_THRESHOLD = 3;
     private volatile boolean shutdown = false;
     private final Queue<Runnable> taskQueue = new LinkedList<>();
-    private final ConcurrentSkipListSet<Worker> workers = new ConcurrentSkipListSet<>((o1, o2) -> {
+    private final Set<Worker> workers = new ConcurrentSkipListSet<>((o1, o2) -> {
         int res = o1.tasks.size() - o2.tasks.size();
         if (res == 0) {
             return (int) (o1.getId() - o2.getId());
@@ -33,7 +33,7 @@ public final class ThreadPoolImpl implements ThreadPool {
     private <T> void addFuture(LightFutureImpl<T> future) {
         synchronized (taskQueue) {
             taskQueue.add(future::run);
-            taskQueue.notifyAll();
+            taskQueue.notify();
         }
     }
 
@@ -87,10 +87,13 @@ public final class ThreadPoolImpl implements ThreadPool {
     // this method are only used in tests
     public List<Integer> workersQueueSize() {
         List<Integer> res = new ArrayList<>();
-        synchronized (workers) {
-            workers.forEach(w -> res.add(w.tasks.size()));
-        }
+        workers.forEach(w -> res.add(w.tasks.size()));
         return res;
+    }
+
+    // this method are only used in tests
+    public Queue<Runnable> getTaskQueue() {
+        return taskQueue;
     }
 
     private final class Scheduler extends Thread {
@@ -106,19 +109,22 @@ public final class ThreadPoolImpl implements ThreadPool {
                             return;
                         }
                     }
-                    Worker worker = workers.pollFirst();
-                    if (worker != null) {
+                    Iterator<Worker> iterator = workers.iterator();
+                    if (iterator.hasNext()) {
+                        Worker worker = iterator.next();
                         if (worker.tasks.size() > TASK_COUNT_THRESHOLD) {
                             continue;
                         }
                         Runnable task = taskQueue.poll();
-                        workers.remove(worker);
+                        iterator.remove();
                         synchronized (worker.tasks) {
                             worker.tasks.add(task);
                             worker.tasks.notify();
                         }
                         workers.add(worker);
                     }
+                    // notify for test
+                    taskQueue.notify();
                 }
             }
         }

@@ -7,14 +7,16 @@ import ru.spbau.mit.api.ThreadPool;
 import ru.spbau.mit.LightExecutionException;
 
 import java.util.*;
+import java.util.concurrent.BrokenBarrierException;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 public class ThreadPoolTest {
 
-    private static final int CORES = Runtime.getRuntime().availableProcessors();
+    private static final int CORES = 2;
     private static volatile ThreadPool threadPool = new ThreadPoolImpl(CORES);
 
     private static ThreadPool getThreadPool() {
@@ -60,22 +62,31 @@ public class ThreadPoolTest {
     }
 
     @Test
-    public void testBalance() throws InterruptedException {
+    public void testBalance() {
         ThreadPool threadPool = getThreadPool();
         AtomicInteger counter = new AtomicInteger(0);
         Runnable runnable = () -> {
             counter.getAndIncrement();
-            while (counter.get() != CORES + 1);
+            while (counter.get() < CORES + 1);
         };
-        for (int i = 0; i < 2 * CORES; ++i) {
+        for (int i = 0; i < 3 * CORES; ++i) {
             threadPool.submit(runnable);
         }
 
-        // wait while scheduler schedule all tasks
-        Thread.sleep(3000);
+        // wait while scheduler schedule all tasks (taskQueue must be empty)
+        Queue<Runnable> taskQueue = ((ThreadPoolImpl) threadPool).getTaskQueue();
+        synchronized (taskQueue) {
+            while (!taskQueue.isEmpty()) {
+                try {
+                    taskQueue.wait();
+                } catch (InterruptedException e) {
+                }
+            }
+        }
 
         List<Integer> workersQueueSize = ((ThreadPoolImpl) threadPool).workersQueueSize();
-        workersQueueSize.forEach(s -> Assert.assertEquals(1, s.intValue()));
+        workersQueueSize.forEach(s -> Assert.assertTrue(s >= 1));
+
         counter.getAndIncrement();
     }
 
@@ -91,15 +102,12 @@ public class ThreadPoolTest {
     @Test
     public void testReady() {
         ThreadPool curThreadPool = getThreadPool();
-        LightFuture<Integer> future = curThreadPool.submit(() -> {
-            final long bigNumber = 1_000_000_000;
-            int rez = 0;
-            for (int i = 0; i < bigNumber; ++i) {
-                rez += i;
-            }
-            return rez;
+        AtomicInteger atomicInteger = new AtomicInteger(0);
+        LightFuture<?> future = curThreadPool.submit(() -> {
+            while (atomicInteger.get() != 1);
         });
         Assert.assertEquals(false, future.isReady());
+        atomicInteger.getAndIncrement();
     }
 
     @Test
